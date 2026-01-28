@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Mini Remote Screen</title>
+</head>
+<body>
+<h2>Mini Remote Screen</h2>
+
+<button onclick="createRoom()">📤 Ekran Paylaş</button>
+<br><br>
+
+<input id="codeInput" placeholder="Kod gir">
+<button onclick="joinRoom()">👁️ İzle</button>
+
+<p id="codeText"></p>
+<video id="video" autoplay playsinline style="width:80%; border:1px solid black;"></video>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const socket = io();
+let peer;
+let localStream;
+let hostId;
+
+// Ekran paylaşan
+async function createRoom() {
+  socket.emit("create-room");
+}
+
+socket.on("room-created", async (code) => {
+  document.getElementById("codeText").innerText = "Kod: " + code;
+
+  localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+
+  const videoEl = document.getElementById("video");
+  videoEl.srcObject = localStream;
+  videoEl.muted = true; // kendi sesini duymamak için
+  videoEl.play();
+
+  peer = new RTCPeerConnection();
+
+  localStream.getTracks().forEach(track => peer.addTrack(track, localStream));
+
+  peer.onicecandidate = e => {
+    if (e.candidate) socket.emit("ice-candidate", { to: null, candidate: e.candidate });
+  };
+
+  // Offer oluştur
+  const offer = await peer.createOffer();
+  await peer.setLocalDescription(offer);
+
+  // Server’a gönder
+  socket.emit("offer", { to: null, offer });
+});
+
+// İzleyen
+function joinRoom() {
+  const code = document.getElementById("codeInput").value;
+  socket.emit("join-room", code);
+}
+
+// hostId geldi
+socket.on("room-joined", (id) => {
+  hostId = id;
+  console.log("Room joined, waiting for offer from host...");
+});
+
+// Signaling
+socket.on("offer", async ({ from, offer }) => {
+  if (!peer) peer = new RTCPeerConnection();
+
+  peer.ontrack = e => {
+    const videoEl = document.getElementById("video");
+    videoEl.srcObject = e.streams[0];
+    videoEl.play();
+  };
+
+  peer.onicecandidate = e => {
+    if (e.candidate) socket.emit("ice-candidate", { to: from, candidate: e.candidate });
+  };
+
+  // İzleyen sadece cevap oluşturacak
+  if (from !== socket.id) { // host değilsek
+    await peer.setRemoteDescription(offer);
+
+    const answer = await peer.createAnswer();
+    await peer.setLocalDescription(answer);
+
+    socket.emit("answer", { to: from, answer });
+  }
+});
+
+socket.on("answer", async ({ answer }) => {
+  await peer.setRemoteDescription(answer);
+});
+
+socket.on("ice-candidate", async ({ candidate }) => {
+  try { await peer.addIceCandidate(candidate); } catch(e){console.log(e);}
+});
+
+</script>
+</body>
+</html>
